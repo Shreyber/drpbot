@@ -59,9 +59,8 @@ def webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
 
     try:
-        # Создаём новый event loop и устанавливаем его текущим
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Получаем текущий event loop, чтобы не создавать новый
+        loop = asyncio.get_event_loop()
 
         # Обрабатываем обновление синхронно
         loop.run_until_complete(telegram_app.process_update(update))

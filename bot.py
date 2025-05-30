@@ -57,10 +57,12 @@ async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    future = asyncio.run_coroutine_threadsafe(
-        telegram_app.process_update(update),
-        telegram_app.loop  # Важно! loop из telegram_app
-    )
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(telegram_app.process_update(update))
+    loop.close()
+
     return "ok"
 
 # === Инициализация приложения ===

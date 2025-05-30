@@ -58,12 +58,19 @@ async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_app.process_update(update))
-    loop.close()
+    try:
+        # Создаём новый event loop и устанавливаем его текущим
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-    return "ok"
+        # Обрабатываем обновление синхронно
+        loop.run_until_complete(telegram_app.process_update(update))
+    finally:
+        # Не закрываем loop — чтобы избежать ошибки "event loop is closed"
+        # loop.close() — НЕ НАДО!
+        pass
+
+    return "ok", 200
 
 # === Инициализация приложения ===
 async def setup():

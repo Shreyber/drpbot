@@ -1,87 +1,146 @@
 import os
-import asyncio
-from flask import Flask, request
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
+from dotenv import load_dotenv
+from telegram import (
+    Update,
+    WebAppInfo,
+    InlineKeyboardMarkup, InlineKeyboardButton,
 )
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    ContextTypes, CallbackQueryHandler, filters
+)
+
+load_dotenv()
 
 # === Переменные окружения ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+QUESTIONS_THEME_ID = 2
+SMS_THEME_ID = 5
 
-# === Flask-приложение для Render ===
-app = Flask(__name__)
-
-# === Telegram Application ===
-telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 message_map = {}  # message_id в админ-чате -> user_id
+user_state = {}  # user_id -> состояние пользователя
 
 # === Команда /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Привет! Чтобы задать вопрос, используй команду:\n/ask ваш вопрос")
+    user_state[update.message.from_user.id] = "main_menu"
+    await update.message.reply_text("Выберите действие:", reply_markup=main_menu_keyboard())
 
-# === Команда /ask ===
-async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# === Обработчики кнопок ===
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "main_menu":
+        user_state[query.from_user.id] = "main_menu"
+        # Возвращаем пользователя в главное меню
+        await query.edit_message_text(
+            "Выберите действие:",
+            reply_markup=main_menu_keyboard()
+        )
+    elif query.data == "ask":
+        user_state[query.from_user.id] = "awaiting_question"
+        await query.edit_message_text("✍️ Напишите ваш вопрос одним сообщением.", reply_markup=back_keyboard())
+    elif query.data == "sms":
+        user_state[query.from_user.id] = "awaiting_sms"
+        await query.edit_message_text("🎙️Напишите ваш привет одним сообщением. Не забудьте указать фамилию и имя ребенка, провинцию, название музыкальной композиции с исполнителем.", reply_markup=back_keyboard())
+    elif query.data == "merch":
+        await query.message.reply_text("👕 Наш мерч можно посмотреть на сайте: drpmerch.vercel.app")
+
+# === Обработка текстовых сообщений от пользователей ===
+async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
     user = update.effective_user
-    if not context.args:
-        await update.message.reply_text("❗ Напиши вопрос после команды /ask.")
-        return
 
-    question = " ".join(context.args)
-    text = f"📩 Вопрос от @{user.username or 'без ника'} (ID: {user.id}):\n{question}"
+    if user_state.get(user_id) == "awaiting_question":
+        user_msg = update.message
+        del user_state[user_id]  # сбрасываем состояние
 
-    admin_msg = await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
-    message_map[admin_msg.message_id] = user.id
+        text = (
+            f"📩 Вопрос от {user.full_name} @{user.username}:\n"
+            f"{update.message.text}"
+        )
 
-    await update.message.reply_text("✅ Вопрос отправлен! Мы скоро ответим.")
+        admin_msg = await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=text,
+            message_thread_id=QUESTIONS_THEME_ID
+        )
+        message_map[admin_msg.message_id] = (user.id, user_msg.message_id)
+
+        await update.message.reply_text("✅ Вопрос отправлен. Ожидайте ответа.")
+        await start(update, context)
+    elif user_state.get(user_id) == "awaiting_sms":
+        user_msg = update.message
+        del user_state[user_id]  # сбрасываем состояние
+
+        text = (
+            f"📩 СМС привет от {user.full_name} @{user.username}:\n"
+            f"{update.message.text}"
+        )
+
+        admin_msg = await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=text,
+            message_thread_id=SMS_THEME_ID
+        )
+        #message_map[admin_msg.message_id] = (user.id, user_msg.message_id)
+
+        await update.message.reply_text("✅ СМС принята. Все приветы обязательно будут озвучены в эфире!")
+        await start(update, context)
+    else:
+        # Если пользователь не в режиме "задать вопрос"
+        try:
+            await update.message.delete()  # удаляем любое несанкционированное сообщение
+        except Exception as e:
+            print(f"Ошибка при удалении: {e}")
 
 # === Обработка ответа администратора ===
 async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
         return
+    if update.message.message_thread_id != QUESTIONS_THEME_ID:
+        await update.message.reply_text("❌ Ответы можно отправлять только на вопросы в теме вопросов.")
+        return
 
     replied_id = update.message.reply_to_message.message_id
-    user_id = message_map.get(replied_id)
 
-    if user_id:
-        try:
-            await context.bot.send_message(chat_id=user_id, text=update.message.text)
-            await update.message.reply_text("✅ Ответ отправлен пользователю.")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при отправке: {e}")
-
-# === Flask endpoint для Telegram Webhook ===
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+    if replied_id is None:
+        await update.message.reply_text("❌ Не удалось найти пользователя для этого вопроса.")
+        return
 
     try:
-        # Получаем текущий event loop, чтобы не создавать новый
-        loop = asyncio.get_event_loop()
+        user_id, user_msg_id = message_map.get(replied_id)
+        await context.bot.send_message(chat_id=user_id, text=update.message.text, reply_to_message_id=user_msg_id)
+        await update.message.reply_text("✅ Ответ отправлен пользователю.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при отправке: {e}")
 
-        # Обрабатываем обновление синхронно
-        loop.run_until_complete(telegram_app.process_update(update))
-    finally:
-        # Не закрываем loop — чтобы избежать ошибки "event loop is closed"
-        # loop.close() — НЕ НАДО!
-        pass
+def main_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💬 СМСочки для деточки", callback_data="sms")
+        ],
+        [
+            InlineKeyboardButton("👕 Посмотреть мерч",  web_app=WebAppInfo(url="https://drpmerch.vercel.app"))
+        ],
+        [
+            InlineKeyboardButton("❓ Задать вопрос", callback_data="ask")
+        ]
+    ])
 
-    return "ok", 200
+def back_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data="main_menu")]])
 
 # === Инициализация приложения ===
-async def setup():
+def setup():
+    telegram_app = Application.builder().token(BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start))
-    telegram_app.add_handler(CommandHandler("ask", ask))
-    telegram_app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.TEXT, handle_reply))
-
-    await telegram_app.initialize()
-    await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
-    print("✅ Webhook установлен:", WEBHOOK_URL)
+    telegram_app.add_handler(CallbackQueryHandler(handle_buttons))
+    telegram_app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, handle_user_text))
+    telegram_app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.REPLY & filters.TEXT, handle_reply))
+    telegram_app.run_polling()
 
 # === Запуск ===
 if __name__ == "__main__":
-    asyncio.run(setup())
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    setup()

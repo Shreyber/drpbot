@@ -40,7 +40,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif query.data == "ask":
         user_state[query.from_user.id] = "awaiting_question"
-        await query.edit_message_text("✍️ Напишите ваш вопрос одним сообщением.", reply_markup=back_keyboard())
+        await query.edit_message_text(f"✍️ Напишите ваш вопрос одним сообщением. По срочным вопросам связывайтесь с руководством лагеря или вожатыми отрядов напрямую. <a href='https://drpolenovo.ru/informatsija-o-lagere/chasto-zadavaemye-voprosy.html'>Часто задаваемые вопросы.</a>", reply_markup=back_keyboard(), parse_mode="HTML")
     elif query.data == "sms":
         user_state[query.from_user.id] = "awaiting_sms"
         await query.edit_message_text("🎙️Напишите ваш привет одним сообщением. Не забудьте указать фамилию и имя ребенка, провинцию, название музыкальной композиции с исполнителем.", reply_markup=back_keyboard())
